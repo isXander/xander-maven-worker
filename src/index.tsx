@@ -15,7 +15,7 @@ export const Layout = ({ versionId, children }: { versionId: string; children?: 
 			<script src="https://unpkg.com/htmx.org@1.9.11"></script>
 			<link rel="stylesheet" href={`/style.css?v=${versionId}`} />
 		</head>
-		<body hx-boost="true" hx-target="#content">
+		<body hx-boost="true" hx-target="#content" hx-swap="innerHTML show:window:top">
 			<div class="container">
 				<h1>Maven Repository</h1>
 				<div id="content" style="min-height: 200px;">
