@@ -124,7 +124,8 @@ ui.get('/:repo/*', async (c) => {
 					if (file.key === path) return null; // skip the folder itself if it's an object
 					const fileName = file.key.substring(path.length);
 					const size = (file.size / 1024).toFixed(2) + ' KB';
-					const date = new Date(file.uploaded).toLocaleString();
+					const dateObj = new Date(file.uploaded);
+					const date = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
 
 					return (
 						<li>
