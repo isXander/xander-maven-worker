@@ -11,7 +11,7 @@ A Maven Server in the form of a Cloudflare Worker, using Cloudflare R2 for stora
   - Uses HTMX, extremely minimal and fast web UI with caching
 - Optionally enforceable immutability
 - Configures Cache-Control headers:
-  - Immutable data: `public, max-age=1800, s-maxage=31536000`
+  - Immutable data: `public, max-age=1800, s-maxage=31536000, immutable`
   - Mutable data: `public, max-age=60, s-maxage=300`
 - Autogenerates checksums for uploaded artifacts
 - Ignores uploaded checksums in favor of the generated ones
@@ -27,10 +27,12 @@ A Maven Server in the form of a Cloudflare Worker, using Cloudflare R2 for stora
 
 Most configuration is done via environment variables found in `"vars":` in the `wrangler.jsonc` file.
 
+- `SERVER_NAME`: The name of the server, displayed in the UI
 - `REPOSITORIES`: A comma-separated list of repository names to use, should match the binding of the R2 bucket
 - `CHECKSUM_VALIDATION`: (true/false) Whether to validate uploaded checksums if auto-generation is disabled
 - `CHECKSUM_AUTOGENERATION`: (true/false) Whether to automatically generate checksums for uploaded artifacts
 - `ALLOW_OVERWRITES`: (true/false) Whether to allow overwriting of existing artifacts
+- `VALIDATE_PATHS`: (true/false) Applies loose path validation to requests, rejecting paths that do not match the expected Maven object path format
 
 You also need to set the `PEPPER` environment secret.
 
