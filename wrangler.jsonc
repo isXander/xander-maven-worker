@@ -14,6 +14,7 @@
 		"enabled": true,
 	},
 	"vars": {
+		"SERVER_NAME": "Xander's Maven Server",
 		"REPOSITORIES": "releases,snapshots",
 		"CHECKSUM_VALIDATION": "true",
 		"CHECKSUM_AUTOGENERATION": "true",
