@@ -61,7 +61,7 @@
 	],
 	"routes": [
 		{
-			"pattern": "beta.maven.isxander.dev",
+			"pattern": "maven.isxander.dev",
 			"zone_name": "isxander.dev",
 			"custom_domain": true,
 		},
