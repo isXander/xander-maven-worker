@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Context, Hono } from 'hono';
 import crypto from 'node:crypto';
 import {
 	getBucket,
@@ -11,13 +11,38 @@ import {
 
 export const api = new Hono<{ Bindings: Env }>({ strict: false });
 
+function returnCachedNotFound(c: Context) {
+	const res = new Response('Not Found', {
+		status: 404,
+		headers: {
+			'Cache-Control': 'public, max-age=120',
+		},
+	});
+	const cache = caches.default;
+	const putKey = new Request(c.req.url, { method: 'GET' });
+	c.executionCtx.waitUntil(cache.put(putKey, res.clone()));
+	return res;
+}
+
 api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
+	const cache = caches.default;
+	// Cloudflare Workers Cache API natively only supports caching GET requests
+	// HEAD requests are not added to the cache, but we can extract the headers from a cached GET request
+	const matchReq = new Request(c.req.raw, { method: 'GET' });
+	const cachedResponse = await cache.match(matchReq);
+	if (cachedResponse) {
+		if (c.req.method === 'HEAD') {
+			return new Response(null, { headers: cachedResponse.headers, status: cachedResponse.status });
+		}
+		return cachedResponse;
+	}
+
 	const repo = c.req.param('repo');
 	const bucket = getBucket(c.env, repo);
 
 	if (!bucket) {
 		console.warn({ repo: repo, rejected: 'unknown bucket' });
-		return c.notFound();
+		return returnCachedNotFound(c);
 	}
 
 	const path = c.req.path.substring(`/${repo}/`.length);
@@ -28,7 +53,7 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 
 	if (isValidatePathsEnabled(c.env) && !isPotentialMavenObjectPath(path)) {
 		console.warn({ path: path, rejected: 'invalid path' });
-		return c.notFound();
+		return returnCachedNotFound(c);
 	}
 
 	const cacheControl = getCacheControl(path, c.env);
@@ -37,7 +62,7 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 		const object = await bucket.head(path);
 		if (!object) {
 			console.warn({ path: path, rejected: 'object not found for HEAD' });
-			return c.notFound();
+			return returnCachedNotFound(c);
 		}
 
 		const headers = new Headers();
@@ -75,7 +100,7 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 	const object = await bucket.get(path, options);
 	if (!object) {
 		console.warn({ path: path, rejected: 'object not found for GET' });
-		return c.notFound();
+		return returnCachedNotFound(c);
 	}
 
 	const headers = new Headers();
@@ -125,10 +150,17 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 		headers.set('Content-Length', object.size.toString());
 	}
 
-	return new Response((object as any).body, {
+	const res = new Response(object.body, {
 		status,
 		headers,
 	});
+
+	if (status === 200) {
+		const putKey = new Request(c.req.url, { method: 'GET' });
+		c.executionCtx.waitUntil(cache.put(putKey, res.clone()));
+	}
+
+	return res;
 });
 
 api.put('/:repo/*', async (c) => {
