@@ -1,8 +1,9 @@
-import { Context, Hono } from 'hono';
+import { Hono } from 'hono';
 import crypto from 'node:crypto';
 import {
 	getBucket,
 	getCacheControl,
+	isChecksumPath,
 	isMutablePath,
 	isOverwritesEnabled,
 	isPotentialMavenObjectPath,
@@ -11,38 +12,13 @@ import {
 
 export const api = new Hono<{ Bindings: Env }>({ strict: false });
 
-function returnCachedNotFound(c: Context) {
-	const res = new Response('Not Found', {
-		status: 404,
-		headers: {
-			'Cache-Control': 'public, max-age=120',
-		},
-	});
-	const cache = caches.default;
-	const putKey = new Request(c.req.url, { method: 'GET' });
-	c.executionCtx.waitUntil(cache.put(putKey, res.clone()));
-	return res;
-}
-
 api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
-	const cache = caches.default;
-	// Cloudflare Workers Cache API natively only supports caching GET requests
-	// HEAD requests are not added to the cache, but we can extract the headers from a cached GET request
-	const matchReq = new Request(c.req.raw, { method: 'GET' });
-	const cachedResponse = await cache.match(matchReq);
-	if (cachedResponse) {
-		if (c.req.method === 'HEAD') {
-			return new Response(null, { headers: cachedResponse.headers, status: cachedResponse.status });
-		}
-		return cachedResponse;
-	}
-
 	const repo = c.req.param('repo');
 	const bucket = getBucket(c.env, repo);
 
 	if (!bucket) {
 		console.warn({ repo: repo, rejected: 'unknown bucket' });
-		return returnCachedNotFound(c);
+		return c.notFound();
 	}
 
 	const path = c.req.path.substring(`/${repo}/`.length);
@@ -53,7 +29,7 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 
 	if (isValidatePathsEnabled(c.env) && !isPotentialMavenObjectPath(path)) {
 		console.warn({ path: path, rejected: 'invalid path' });
-		return returnCachedNotFound(c);
+		return c.notFound();
 	}
 
 	const cacheControl = getCacheControl(path, c.env);
@@ -62,7 +38,7 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 		const object = await bucket.head(path);
 		if (!object) {
 			console.warn({ path: path, rejected: 'object not found for HEAD' });
-			return returnCachedNotFound(c);
+			return c.notFound();
 		}
 
 		const headers = new Headers();
@@ -100,7 +76,7 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 	const object = await bucket.get(path, options);
 	if (!object) {
 		console.warn({ path: path, rejected: 'object not found for GET' });
-		return returnCachedNotFound(c);
+		return c.notFound();
 	}
 
 	const headers = new Headers();
@@ -108,6 +84,12 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 	headers.set('etag', object.httpEtag);
 	headers.set('Accept-Ranges', 'bytes');
 	headers.set('Cache-Control', cacheControl);
+	// if a checksum, use the cache tag of the target file
+	if (isChecksumPath(path)) {
+		headers.set('Cache-Tag', path.replace(/\.[^.]+$/, ''));
+	} else {
+		headers.set('Cache-Tag', path);
+	}
 
 	// If the precondition fails, R2 returns an R2Object instead of R2ObjectBody.
 	const hasBody = 'body' in object && object.body !== undefined;
@@ -150,20 +132,17 @@ api.on(['GET', 'HEAD'], '/:repo/*', async (c) => {
 		headers.set('Content-Length', object.size.toString());
 	}
 
-	const res = new Response(object.body, {
+	return new Response(object.body, {
 		status,
 		headers,
 	});
-
-	if (status === 200) {
-		const putKey = new Request(c.req.url, { method: 'GET' });
-		c.executionCtx.waitUntil(cache.put(putKey, res.clone()));
-	}
-
-	return res;
 });
 
 api.put('/:repo/*', async (c) => {
+	// cast to cloudflare's type, instead of hono's reimplemented one
+	// this is because ctx.cache is new and hono doesn't have it
+	const ctx = c.executionCtx as unknown as ExecutionContext;
+
 	const repo = c.req.param('repo');
 	const bucket = getBucket(c.env, repo);
 
@@ -201,7 +180,7 @@ api.put('/:repo/*', async (c) => {
 		}
 	}
 
-	const isChecksumFile = path.endsWith('.md5') || path.endsWith('.sha1') || path.endsWith('.sha256') || path.endsWith('.sha512');
+	const isChecksumFile = isChecksumPath(path);
 
 	// If autogeneration is enabled, we already generated the checksums when the target file was uploaded.
 	// Just silently ignore any explicit checksum uploads from the client.
@@ -229,14 +208,16 @@ api.put('/:repo/*', async (c) => {
 			const uploadedHash = uploadedHashText.split(/\s+/)[0].trim().toLowerCase();
 
 			if (computedHash !== uploadedHash) {
-				console.warn({ path: path, rejected: 'checksum mismatch, rejected' });
+				console.warn({ path: path, accepted: false, message: 'checksum mismatch, rejected' });
 				return c.text(`Checksum mismatch. Expected ${computedHash}, got ${uploadedHash}`, 400);
 			}
 
 			await bucket.put(path, uploadedHashText, {
 				httpMetadata: { contentType: 'text/plain' },
 			});
-			console.info({ path: path, accepted: 'checksum validated, accepted' });
+			await invalidatePath(ctx, path);
+			console.info({ path: path, accepted: true, message: 'checksum validated, accepted' });
+
 			return c.text('Created', 201);
 		}
 	}
@@ -246,6 +227,7 @@ api.put('/:repo/*', async (c) => {
 			contentType: c.req.header('content-type') || 'application/octet-stream',
 		},
 	});
+	await invalidatePath(ctx, path);
 
 	// Checksum autogeneration
 	if (!isChecksumFile && c.env.CHECKSUM_AUTOGENERATION === 'true') {
@@ -271,14 +253,30 @@ api.put('/:repo/*', async (c) => {
 			const id = c.env.METADATA_DEBOUNCER.idFromName(`${repo}:${root}`);
 			const stub = c.env.METADATA_DEBOUNCER.get(id);
 
+			// Durable object invocation
 			const url = new URL('http://do/trigger');
 			url.searchParams.set('repo', repo);
 			url.searchParams.set('root', root);
 
-			c.executionCtx.waitUntil(stub.fetch(new Request(url.toString())));
+			ctx.waitUntil(stub.fetch(new Request(url.toString())));
 		}
 	}
 
 	console.info({ path: path, accepted: 'upload accepted' });
 	return c.text('Created', 201);
 });
+
+// invalidates the cache for the path itself, and associated /web paths
+async function invalidatePath(ctx: ExecutionContext, path: string) {
+	// 1. The path itself
+
+	// if the path is a checksum, use the cache tag of the target file
+	const cacheTag = isChecksumPath(path) ? path.replace(/\.[^.]+$/, '') : path;
+	await ctx.cache?.purge({ tags: [cacheTag] });
+
+	// 2. /web/<containing directory>
+
+	// Remove the file name itself, and trailing /, and prepend /web/
+	const webPath = path.replace(/\/[^/]+$/, '').replace(/^\/?/, '/web/');
+	await ctx.cache?.purge({ tags: [webPath] });
+}

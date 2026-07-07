@@ -10,9 +10,10 @@ A Maven Server in the form of a Cloudflare Worker, using Cloudflare R2 for stora
 - Web UI for browsing uploaded artifacts, at `/web/`
   - Uses HTMX, extremely minimal and fast web UI with caching
 - Optionally enforceable immutability
-- Configures Cache-Control headers:
-  - Immutable data: `public, max-age=1800, s-maxage=31536000, immutable`
-  - Mutable data: `public, max-age=60, s-maxage=300`
+- Uses [Cloudflare Workers Cache](https://blog.cloudflare.com/workers-cache/):
+  - Immutable data: `public, max-age=3600, immutable, stale-while-revalidate=31536000`
+  - Mutable data: `public, max-age=300, stale-while-revalidate=1800`
+  - Purges cached data on successful upload
 - Autogenerates checksums for uploaded artifacts
 - Ignores uploaded checksums in favor of the generated ones
 - Supports Range requests and conditional requests

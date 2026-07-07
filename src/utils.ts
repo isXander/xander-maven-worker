@@ -8,8 +8,9 @@ export function getRepositories(env: Env): string[] {
 	return env.REPOSITORIES.split(',').map((s) => s.trim());
 }
 
-export const MUTABLE_CACHE_CONTROL = 'public, max-age=60, s-maxage=300';
-export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=1800, s-maxage=31536000, immutable';
+export const MUTABLE_CACHE_CONTROL = 'public, max-age=300, stale-while-revalidate=1800';
+export const IMMUTABLE_CACHE_CONTROL = 'public, max-age=3600, immutable, stale-while-revalidate=31536000';
+export const CHECKSUM_TYPES = ['sha1', 'sha256', 'sha512', 'md5'];
 
 /**
  * Returns whether a given absolute path could potentially be a valid Maven object path.
@@ -69,4 +70,7 @@ export function getCacheControl(path: string, env: Env): string {
 }
 export function isValidatePathsEnabled(env: Env): boolean {
 	return (env.VALIDATE_PATHS as string) === 'true';
+}
+export function isChecksumPath(path: string): boolean {
+	return CHECKSUM_TYPES.some(type => path.endsWith(`.${type}`));
 }

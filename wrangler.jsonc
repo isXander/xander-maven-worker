@@ -13,6 +13,9 @@
 	"observability": {
 		"enabled": true,
 	},
+	"cache": {
+		"enabled": true,
+	},
 	"vars": {
 		"SERVER_NAME": "Xander's Maven Server",
 		"REPOSITORIES": "releases,snapshots",
