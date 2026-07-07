@@ -72,5 +72,5 @@ export function isValidatePathsEnabled(env: Env): boolean {
 	return (env.VALIDATE_PATHS as string) === 'true';
 }
 export function isChecksumPath(path: string): boolean {
-	return CHECKSUM_TYPES.some(type => path.endsWith(`.${type}`));
+	return CHECKSUM_TYPES.some((type) => path.endsWith(`.${type}`));
 }
